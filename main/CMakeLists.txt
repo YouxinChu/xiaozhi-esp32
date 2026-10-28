@@ -1473,7 +1473,21 @@ partition_table_get_partition_info(size "--partition-name assets" "size")
 partition_table_get_partition_info(offset "--partition-name assets" "offset")
 if ("${size}" AND "${offset}")
     # Flash assets based on configuration
-    if(CONFIG_FLASH_DEFAULT_ASSETS)
+    # Box-3B uses the LVGL display path, but its custom emotion GIFs still
+    # need to be packed through the expression-assets builder. Prefer that
+    # builder whenever emote style is enabled, even if an older sdkconfig
+    # selected the default assets choice.
+    if(CONFIG_FLASH_EXPRESSION_ASSETS OR CONFIG_USE_EMOTE_MESSAGE_STYLE OR CONFIG_BOARD_TYPE_ESP32_S3_BOX_3)
+        set(ASSETS_NAME "expression_assets")
+        set(ASSETS_PARTITION "assets")
+        set(ASSETS_FILE "${CMAKE_BINARY_DIR}/${ASSETS_NAME}.bin")
+        build_speaker_assets_bin("${ASSETS_PARTITION}" ${EMOTE_RESOLUTION} ${ASSETS_FILE} ${CONFIG_MMAP_FILE_NAME_LENGTH})
+        message(STATUS "Generated emote assets: ${ASSETS_FILE} -> ${ASSETS_PARTITION} partition")
+        # Expression assets are already a complete SPIFFS image (including
+        # the GIF files and index.json); do not wrap them in the default
+        # speech-model asset builder, which would drop custom emotions.
+        esptool_py_flash_to_partition(flash "${ASSETS_PARTITION}" "${ASSETS_FILE}")
+    elseif(CONFIG_FLASH_DEFAULT_ASSETS)
         # Build default assets based on configuration
         build_default_assets_bin()
         esptool_py_flash_to_partition(flash "assets" "${GENERATED_ASSETS_LOCAL_FILE}")

@@ -13,6 +13,8 @@ static const char* const STATE_STRINGS[] = {
     "idle",
     "connecting",
     "listening",
+    "thinking",
+    "executing",
     "speaking",
     "notifying",
     "upgrading",
@@ -85,8 +87,22 @@ bool DeviceStateMachine::IsValidTransition(DeviceState from, DeviceState to) con
                    to == kDeviceStateListening;
 
         case kDeviceStateListening:
-            // Can go to speaking or idle
-            return to == kDeviceStateSpeaking ||
+            // Can go to thinking, speaking or idle
+            return to == kDeviceStateThinking ||
+                   to == kDeviceStateSpeaking ||
+                   to == kDeviceStateIdle;
+
+        case kDeviceStateThinking:
+            // LLM may answer directly or request a device/tool operation.
+            return to == kDeviceStateExecuting ||
+                   to == kDeviceStateSpeaking ||
+                   to == kDeviceStateListening ||
+                   to == kDeviceStateIdle;
+
+        case kDeviceStateExecuting:
+            return to == kDeviceStateThinking ||
+                   to == kDeviceStateSpeaking ||
+                   to == kDeviceStateListening ||
                    to == kDeviceStateIdle;
 
         case kDeviceStateSpeaking:

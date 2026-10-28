@@ -225,6 +225,13 @@ void EmoteDisplay::SetStatus(const char* const status) {
             emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_IDLE, NULL);
         } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0) {
             emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_SPEAK, NULL);
+        } else if (std::strcmp(status, Lang::Strings::THINKING) == 0 ||
+                   std::strcmp(status, Lang::Strings::EXECUTING) == 0) {
+            // The emote component has no dedicated thinking/executing event.
+            // Keep its animation selected by SetEmotion(), and publish the
+            // product state text through the system-message channel instead
+            // of leaving the previous "Listening" label on screen.
+            emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_SYS, status);
         } else if (std::strcmp(status, Lang::Strings::ERROR) == 0) {
             emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_SET, NULL);
         }

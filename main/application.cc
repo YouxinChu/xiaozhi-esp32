@@ -288,9 +288,6 @@ void Application::Run() {
                 // SystemInfo::PrintTaskCpuUsage(pdMS_TO_TICKS(1000));
             }
         }
-        if (bits & MAIN_EVENT_STARTUP_HINT_TIMEOUT) {
-            HideStartupWakeWordHint();
-        }
         ShowStartupWakeWordHint();
     }
 }
@@ -449,7 +446,9 @@ void Application::CheckAssetsVersion() {
     // Apply assets
     assets.Apply();
     display->SetChatMessage("system", "");
-    display->SetEmotion("robot_2");
+    // Default to the A visual pack after assets are mounted.
+    emotion_pack_ = "A";
+    SetEmotionForPack("neutral");
 }
 
 void Application::CheckNewVersion() {
@@ -640,9 +639,11 @@ void Application::InitializeProtocol() {
                     SetDeviceState(kDeviceStateSpeaking);
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
-                Schedule([this]() {
+                auto mode = cJSON_GetObjectItem(root, "mode");
+                const bool single_turn = cJSON_IsString(mode) && strcmp(mode->valuestring, "single") == 0;
+                Schedule([this, single_turn]() {
                     if (GetDeviceState() == kDeviceStateSpeaking) {
-                        if (listening_mode_ == kListeningModeManualStop) {
+                        if (single_turn || listening_mode_ == kListeningModeManualStop) {
                             SetDeviceState(kDeviceStateIdle);
                         } else {
                             SetDeviceState(kDeviceStateListening);
@@ -681,11 +682,26 @@ void Application::InitializeProtocol() {
                 });
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {
+            // The protocol phase itself drives the internal state callback;
+            // emotion names are no longer required from the gateway.
+            SetDeviceState(kDeviceStateThinking);
             auto emotion = cJSON_GetObjectItem(root, "emotion");
             if (cJSON_IsString(emotion)) {
-                Schedule([display, emotion_str = std::string(emotion->valuestring)]() {
-                    display->SetEmotion(emotion_str.c_str());
+                if (strcmp(emotion->valuestring, "executing") == 0) SetDeviceState(kDeviceStateExecuting);
+            }
+        } else if (strcmp(type->valuestring, "emotion_pack") == 0) {
+            auto pack = cJSON_GetObjectItem(root, "pack");
+            if (cJSON_IsString(pack) && (strcmp(pack->valuestring, "A") == 0 || strcmp(pack->valuestring, "E") == 0)) {
+                emotion_pack_ = pack->valuestring;
+                ESP_LOGI(TAG, "Emotion pack selected: %s", emotion_pack_.c_str());
+                // Re-render the current state immediately so the change is visible.
+                auto selected = emotion_pack_;
+                Schedule([this, selected]() {
+                    emotion_pack_ = selected;
+                    SetEmotionForPack("neutral");
                 });
+            } else {
+                ESP_LOGW(TAG, "emotion_pack requires pack A or E");
             }
         } else if (strcmp(type->valuestring, "mcp") == 0) {
             auto payload = cJSON_GetObjectItem(root, "payload");
@@ -762,12 +778,25 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
     }
 }
 
+void Application::SetEmotionForPack(const char* emotion) {
+    auto display = Board::GetInstance().GetDisplay();
+    // Select a state-specific loop.  A single all-state GIF causes visible
+    // jumps at the loop boundary and makes idle/thinking look identical.
+    std::string mapped = emotion_pack_ == "E" ? "orika_e_" : "orika_a_";
+    if (emotion && strcmp(emotion, "thinking") == 0) mapped += "thinking";
+    else if (emotion && strcmp(emotion, "executing") == 0) mapped += "executing";
+    else if (emotion && strcmp(emotion, "speaking") == 0) mapped += "speaking";
+    else if (emotion && strcmp(emotion, "listening") == 0) mapped += "listening";
+    else mapped += "idle";
+    display->SetEmotion(mapped.c_str());
+}
+
 void Application::Alert(const char* status, const char* message, const char* emotion,
                         const std::string_view& sound) {
     ESP_LOGW(TAG, "Alert [%s] %s: %s", emotion, status, message);
     auto display = Board::GetInstance().GetDisplay();
     display->SetStatus(status);
-    display->SetEmotion(emotion);
+    SetEmotionForPack(emotion);
     display->SetChatMessage("system", message);
     if (!sound.empty()) {
         audio_service_.PlaySound(sound);
@@ -779,7 +808,7 @@ void Application::DismissAlert() {
     if (GetDeviceState() == kDeviceStateIdle) {
         auto display = Board::GetInstance().GetDisplay();
         display->SetStatus(Lang::Strings::STANDBY);
-        display->SetEmotion("neutral");
+        SetEmotionForPack("neutral");
         display->SetChatMessage("system", "");
     }
 }
@@ -989,6 +1018,7 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
     }
 
     ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+    HideStartupWakeWordHint();
 #if CONFIG_SEND_WAKE_WORD_DATA
     // Encode and send the wake word data to the server
     while (auto packet = audio_service_.PopWakeWordPacket()) {
@@ -1026,20 +1056,35 @@ void Application::HandleStateChangedEvent() {
             if (last_error_message_.empty()) {
                 display->SetStatus(Lang::Strings::STANDBY);
                 display->ClearChatMessages();  // Clear messages first
-                display->SetEmotion(
-                    "neutral");  // Then set emotion (wechat mode checks child count)
+                SetEmotionForPack("neutral");  // Then set emotion (wechat mode checks child count)
             }
             audio_service_.EnableVoiceProcessing(false);
+            // Re-arm WakeNet after TTS.  Calling enable alone can leave the
+            // detector disabled when the audio engine was previously used for
+            // playback; explicitly cycling it restores the second wake cycle.
+            audio_service_.EnableWakeWordDetection(false);
             audio_service_.EnableWakeWordDetection(true);
+            // Keep the wake-word hint visible whenever the device is waiting
+            // for a new wake cycle, including after a completed conversation.
+            pending_startup_wake_word_hint_ = true;
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
-            display->SetEmotion("neutral");
+            SetEmotionForPack("neutral");
             display->SetChatMessage("system", "");
             break;
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
-            display->SetEmotion("neutral");
+            SetEmotionForPack("listening");
+
+            // Play the wake acknowledgement before opening the microphone.
+            // This prevents the acknowledgement itself from entering ASR.
+            if (play_popup_on_listening_) {
+                play_popup_on_listening_ = false;
+                pending_listening_start_ = true;
+                audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+                break;
+            }
 
             // Make sure the audio processor is running
             if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning()) {
@@ -1056,8 +1101,17 @@ void Application::HandleStateChangedEvent() {
                 ConfigureWakeWordForListening();
             }
             break;
+        case kDeviceStateThinking:
+            display->SetStatus(Lang::Strings::THINKING);
+            SetEmotionForPack("thinking");
+            break;
+        case kDeviceStateExecuting:
+            display->SetStatus(Lang::Strings::EXECUTING);
+            SetEmotionForPack("executing");
+            break;
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);
+            SetEmotionForPack("speaking");
 
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_service_.EnableVoiceProcessing(false);
@@ -1084,7 +1138,7 @@ void Application::HandleStateChangedEvent() {
 void Application::ShowStartupWakeWordHint() {
     // A coalesced activation/state event can queue another idle UI cleanup.
     // Wait for it before adding the hint, or ClearChatMessages() would erase it.
-    if (!pending_startup_wake_word_hint_ ||
+    if (!pending_startup_wake_word_hint_ || !startup_wake_word_hint_message_.empty() ||
         (xEventGroupGetBits(event_group_) & MAIN_EVENT_STATE_CHANGED)) {
         return;
     }
@@ -1119,24 +1173,9 @@ void Application::ShowStartupWakeWordHint() {
         return;
     }
     message.replace(placeholder, 2, words);
-    if (startup_wake_word_hint_timer_ == nullptr) {
-        esp_timer_create_args_t timer_args = {
-            .callback =
-                [](void* arg) {
-                    auto app = static_cast<Application*>(arg);
-                    xEventGroupSetBits(app->event_group_, MAIN_EVENT_STARTUP_HINT_TIMEOUT);
-                },
-            .arg = this,
-            .dispatch_method = ESP_TIMER_TASK,
-            .name = "startup_hint",
-            .skip_unhandled_events = false,
-        };
-        ESP_ERROR_CHECK(esp_timer_create(&timer_args, &startup_wake_word_hint_timer_));
-    }
     ESP_LOGI(TAG, "Startup wake word hint: %s", message.c_str());
     Board::GetInstance().GetDisplay()->SetChatMessage("assistant", message.c_str());
     startup_wake_word_hint_message_ = std::move(message);
-    ESP_ERROR_CHECK(esp_timer_start_once(startup_wake_word_hint_timer_, 5000 * 1000));
 }
 
 void Application::HideStartupWakeWordHint() {
@@ -1162,11 +1201,6 @@ void Application::StartListeningAudio() {
 
     ConfigureWakeWordForListening();
 
-    // Play popup sound after ResetDecoder (in EnableVoiceProcessing) has been called
-    if (play_popup_on_listening_) {
-        play_popup_on_listening_ = false;
-        audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
-    }
 }
 
 void Application::ConfigureWakeWordForListening() {

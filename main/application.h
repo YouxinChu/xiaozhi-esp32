@@ -155,6 +155,8 @@ private:
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
+    // Selected visual emotion pack. A and E map logical states to bundled Emote assets.
+    std::string emotion_pack_ = "A";
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 
@@ -192,6 +194,7 @@ private:
     
     // State change handler called by state machine
     void OnStateChanged(DeviceState old_state, DeviceState new_state);
+    void SetEmotionForPack(const char* emotion);
 };
 
 
