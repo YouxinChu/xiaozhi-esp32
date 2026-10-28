@@ -1019,6 +1019,10 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
 
     ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
     HideStartupWakeWordHint();
+    // Always acknowledge a local wake, including builds that upload the wake
+    // word audio to the gateway. Listening is deferred until the short
+    // acknowledgement has drained so it cannot leak into ASR.
+    play_popup_on_listening_ = true;
 #if CONFIG_SEND_WAKE_WORD_DATA
     // Encode and send the wake word data to the server
     while (auto packet = audio_service_.PopWakeWordPacket()) {
@@ -1028,9 +1032,6 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
     protocol_->SendWakeWordDetected(wake_word);
     SetListeningMode(GetDefaultListeningMode());
 #else
-    // Set flag to play popup sound after state changes to listening
-    // (PlaySound here would be cleared by ResetDecoder in EnableVoiceProcessing)
-    play_popup_on_listening_ = true;
     SetListeningMode(GetDefaultListeningMode());
 #endif
 }
@@ -1082,7 +1083,7 @@ void Application::HandleStateChangedEvent() {
             if (play_popup_on_listening_) {
                 play_popup_on_listening_ = false;
                 pending_listening_start_ = true;
-                audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+                audio_service_.PlaySound(Lang::Sounds::OGG_IM_HERE);
                 break;
             }
 
