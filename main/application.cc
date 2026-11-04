@@ -780,15 +780,15 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
 
 void Application::SetEmotionForPack(const char* emotion) {
     auto display = Board::GetInstance().GetDisplay();
-    // Select a state-specific loop.  A single all-state GIF causes visible
-    // jumps at the loop boundary and makes idle/thinking look identical.
-    std::string mapped = emotion_pack_ == "E" ? "orika_e_" : "orika_a_";
-    if (emotion && strcmp(emotion, "thinking") == 0) mapped += "thinking";
-    else if (emotion && strcmp(emotion, "executing") == 0) mapped += "executing";
-    else if (emotion && strcmp(emotion, "speaking") == 0) mapped += "speaking";
-    else if (emotion && strcmp(emotion, "listening") == 0) mapped += "listening";
-    else mapped += "idle";
-    display->SetEmotion(mapped.c_str());
+    // Keep the official asset names so stock assets.bin files remain
+    // compatible with this firmware. The selected pack only affects the
+    // visual files behind these stable logical names.
+    const char* mapped = "neutral";
+    if (emotion && strcmp(emotion, "listening") == 0) mapped = "listen";
+    else if (emotion && strcmp(emotion, "thinking") == 0) mapped = "confused";
+    else if (emotion && strcmp(emotion, "executing") == 0) mapped = "confused";
+    else if (emotion && strcmp(emotion, "speaking") == 0) mapped = "Happy";
+    display->SetEmotion(mapped);
 }
 
 void Application::Alert(const char* status, const char* message, const char* emotion,
@@ -1060,10 +1060,10 @@ void Application::HandleStateChangedEvent() {
                 SetEmotionForPack("neutral");  // Then set emotion (wechat mode checks child count)
             }
             audio_service_.EnableVoiceProcessing(false);
-            // Re-arm WakeNet after TTS.  Calling enable alone can leave the
-            // detector disabled when the audio engine was previously used for
-            // playback; explicitly cycling it restores the second wake cycle.
-            audio_service_.EnableWakeWordDetection(false);
+            // Re-arm WakeNet on every idle transition. A wake detection clears
+            // the engine's active detector bit; checking only the service flag
+            // can leave the AFE running but its detector disabled, making the
+            // second wake require a much louder voice (or fail entirely).
             audio_service_.EnableWakeWordDetection(true);
             // Keep the wake-word hint visible whenever the device is waiting
             // for a new wake cycle, including after a completed conversation.

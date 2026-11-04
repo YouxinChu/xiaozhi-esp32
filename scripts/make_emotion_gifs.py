@@ -25,10 +25,13 @@ def svg(pack: str, state: str, phase: int) -> str:
                 f'transform="rotate({-angle} 160 120)"/>')
         sparks = ''.join(f'<circle cx="{x}" cy="{y}" r="{3 + ((phase+i)%2)}" fill="#e8ffff" opacity="{.45 + .2*((phase+i)%3)}"/>' for i, (x, y) in enumerate(((78, 78), (242, 94), (219, 181))))
         return f'<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><rect width="320" height="240" rx="34" fill="#071522"/><rect x="12" y="12" width="296" height="216" rx="30" fill="#102d42" stroke="#58dfff" stroke-width="5"/>{core}{sparks}</svg>'
-    # E: P6 eyes, dark amber display with natural eye motion.
-    shift = (-7, 0, 7)[phase % 3] if state == "thinking" else 0
-    scale = (1.0, 1.08, .94)[phase % 3] if state == "listening" else 1.0
-    return f'<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><rect width="320" height="240" rx="34" fill="#0b0806"/><rect x="12" y="12" width="296" height="216" rx="30" fill="#281207" stroke="#734018" stroke-width="2"/><g transform="translate({shift} 0) scale({scale} 1)" transform-origin="160 120"><ellipse cx="105" cy="120" rx="34" ry="42" fill="#ffb52e"/><ellipse cx="215" cy="120" rx="34" ry="42" fill="#ffb52e"/><circle cx="105" cy="120" r="13" fill="#321304"/><circle cx="215" cy="120" r="13" fill="#321304"/><circle cx="98" cy="110" r="6" fill="#fff7d0"/><circle cx="208" cy="110" r="6" fill="#fff7d0"/></g></svg>'
+    # E: one calm air bubble instead of the previous two-eye face. The
+    # breathing scale and halo keep state changes readable without making the
+    # device look like it is staring at the user.
+    scale = (1.0, 1.08, .94)[phase % 3] if state in ("listening", "speaking") else 1.0
+    glow = {"thinking": "#c89cff", "executing": "#ffcf70", "speaking": "#83eee0"}.get(state, "#ffb52e")
+    halo = 16 + (phase % 3) * 4
+    return f'<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><rect width="320" height="240" rx="34" fill="#0b0806"/><rect x="12" y="12" width="296" height="216" rx="30" fill="#281207" stroke="#734018" stroke-width="2"/><g transform="scale({scale} 1)" transform-origin="160 120"><circle cx="160" cy="120" r="{halo}" fill="none" stroke="{glow}" stroke-opacity=".2" stroke-width="3"/><circle cx="160" cy="120" r="46" fill="{glow}" fill-opacity=".16" stroke="{glow}" stroke-width="4"/><circle cx="145" cy="105" r="10" fill="#fff7d0" fill-opacity=".78"/><circle cx="177" cy="137" r="6" fill="#fff7d0" fill-opacity=".42"/></g></svg>'
 
 for pack in ("A", "E"):
     # Each device state gets its own loop.  Concatenating idle/thinking/
