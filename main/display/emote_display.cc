@@ -194,6 +194,13 @@ bool EmoteDisplay::SetEmotion(const char* const emotion) {
     esp_err_t err = emote_set_anim_emoji(emote_handle_, emotion);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "emotion \"%s\" not set: %s", emotion, esp_err_to_name(err));
+        // Assets are optional: keep the device usable when a custom package
+        // is missing or cannot be decoded. The built-in SVG remains the last
+        // resort and must never affect audio or wake-word operation.
+        if (std::strcmp(emotion, "robot_2") != 0) {
+            ESP_LOGW(TAG, "falling back to built-in SVG emotion: robot_2");
+            emote_set_anim_emoji(emote_handle_, "robot_2");
+        }
         return false;
     }
     return true;

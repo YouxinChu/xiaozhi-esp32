@@ -449,7 +449,9 @@ void Application::CheckAssetsVersion() {
     // Apply assets
     assets.Apply();
     display->SetChatMessage("system", "");
-    display->SetEmotion("robot_2");
+    // Start with the official assets emotion so a generated assets.bin can
+    // provide the device's initial animation instead of the built-in SVG icon.
+    display->SetEmotion("neutral");
 }
 
 void Application::CheckNewVersion() {
@@ -1039,7 +1041,9 @@ void Application::HandleStateChangedEvent() {
             break;
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
-            display->SetEmotion("neutral");
+            // Listening has its own animated asset. Keep idle/standby on
+            // neutral, but visibly acknowledge active microphone capture.
+            display->SetEmotion("listen");
 
             // Make sure the audio processor is running
             if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning()) {

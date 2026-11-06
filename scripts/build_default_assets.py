@@ -898,7 +898,7 @@ def build_assets_integrated(wakenet_model_paths, multinet_model_paths, text_font
     
     try:
         # Clean and create directories
-        if os.path.exists(temp_build_dir):
+        if os.path.exists(temp_build_dir) and not os.environ.get('ORAKI_KEEP_ASSETS_TEMP'):
             shutil.rmtree(temp_build_dir)
         ensure_dir(temp_build_dir)
         ensure_dir(assets_dir)
@@ -956,7 +956,7 @@ def build_assets_integrated(wakenet_model_paths, multinet_model_paths, text_font
         return False
     finally:
         # Clean up temporary directory
-        if os.path.exists(temp_build_dir):
+        if os.path.exists(temp_build_dir) and not os.environ.get('ORAKI_KEEP_ASSETS_TEMP'):
             shutil.rmtree(temp_build_dir)
 
 
