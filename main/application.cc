@@ -753,13 +753,17 @@ void Application::InitializeProtocol() {
             } else if (strcmp(state->valuestring, "sentence_start") == 0) {
                 auto text = cJSON_GetObjectItem(root, "text");
                 if (cJSON_IsString(text)) {
+                    auto display_text = cJSON_GetObjectItem(root, "display_text");
+                    const char* display_value = cJSON_IsString(display_text)
+                                                    ? display_text->valuestring
+                                                    : text->valuestring;
                     std::vector<TextGlyph> glyphs;
                     uint8_t bpp = 0;
                     if (!TextGlyphPayload::Parse(root, glyphs, bpp)) {
                         glyphs.clear();
                     }
                     ESP_LOGI(TAG, "<< %s", text->valuestring);
-                    Schedule([this, display, message = std::string(text->valuestring),
+                    Schedule([this, display, message = std::string(display_value),
                               glyphs = std::move(glyphs), bpp]() {
                         speaking_text_received_ = true;
                         display->AddTextGlyphs(glyphs, bpp);

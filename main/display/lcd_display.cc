@@ -1159,6 +1159,10 @@ void LcdDisplay::SetSpeakingLayout(bool speaking) {
     if (speaking && !speaking_layout_) {
         ResetSplitPanel("Speaking...");
     }
+    if (!speaking) {
+        lv_anim_delete(bottom_bar_, SetLyricScrollY);
+        lv_obj_scroll_to_y(bottom_bar_, 0, LV_ANIM_OFF);
+    }
     speaking_layout_ = speaking;
     lv_obj_set_flex_align(bottom_bar_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
@@ -1326,6 +1330,8 @@ void LcdDisplay::StartLyricScroll() {
     lv_anim_set_delay(&animation, 1200);
     lv_anim_set_duration(&animation, std::max<int32_t>(2500, scroll_distance * 45));
     lv_anim_set_path_cb(&animation, lv_anim_path_linear);
+    lv_anim_set_repeat_count(&animation, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_repeat_delay(&animation, 1500);
     lv_anim_start(&animation);
 #endif
 }
