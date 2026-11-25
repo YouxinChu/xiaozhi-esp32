@@ -456,7 +456,7 @@ def pack_assets_entries(files, name_length=32):
 
 def configure_assets_models(base_assets, output, wakenet_models, multinet_models,
                             idf_target=None, multinet_model_info=None,
-                            name_length=32, max_size=None):
+                            name_length=32, max_size=None, extra_files=None):
     """Replace prebuilt speech models while preserving custom/Emote UI data."""
     files = read_assets_entries(base_assets, name_length)
     if "index.json" not in files:
@@ -471,6 +471,24 @@ def configure_assets_models(base_assets, output, wakenet_models, multinet_models
         files.pop(previous_models, None)
     files.pop("srmodels.bin", None)
     index.pop("multinet_model", None)
+
+    # Preserve the base asset package while allowing board-specific resources
+    # (for example wake/listen/executing/error animations) to be added.
+    if extra_files:
+        extra_root = Path(extra_files)
+        if not extra_root.is_dir():
+            raise ValueError(f"Extra files path is not a directory: {extra_files}")
+        for source in extra_root.rglob("*"):
+            if source.is_file():
+                name = source.relative_to(extra_root).as_posix()
+                files[name] = (source.read_bytes(), 0, 0)
+                if source.suffix.lower() in {".gif", ".png", ".jpg", ".jpeg"}:
+                    collection = index.setdefault("emoji_collection", [])
+                    if isinstance(collection, list):
+                        entry = {"name": source.stem, "file": name}
+                        if not any(item.get("name") == source.stem for item in collection
+                                   if isinstance(item, dict)):
+                            collection.append(entry)
 
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -898,7 +916,7 @@ def build_assets_integrated(wakenet_model_paths, multinet_model_paths, text_font
     
     try:
         # Clean and create directories
-        if os.path.exists(temp_build_dir):
+        if os.path.exists(temp_build_dir) and os.environ.get("ORAKI_KEEP_ASSETS_TEMP") != "1":
             shutil.rmtree(temp_build_dir)
         ensure_dir(temp_build_dir)
         ensure_dir(assets_dir)
@@ -956,8 +974,34 @@ def build_assets_integrated(wakenet_model_paths, multinet_model_paths, text_font
         return False
     finally:
         # Clean up temporary directory
-        if os.path.exists(temp_build_dir):
+        if os.path.exists(temp_build_dir) and os.environ.get("ORAKI_KEEP_ASSETS_TEMP") != "1":
             shutil.rmtree(temp_build_dir)
+
+
+def load_wake_word_commands(path):
+    """Load and validate an optional list of custom MultiNet wake commands."""
+    if not path:
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as file:
+            commands = json.load(file)
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"Failed to read --wake_words_json: {error}") from error
+    if not isinstance(commands, list) or not commands:
+        raise ValueError("--wake_words_json must contain a non-empty JSON array")
+    for index, command in enumerate(commands):
+        if not isinstance(command, dict) or not all(
+            isinstance(command.get(key), str) and command[key].strip()
+            for key in ('command', 'text')
+        ):
+            raise ValueError(
+                f"--wake_words_json item {index} must contain non-empty string fields "
+                "'command' and 'text'"
+            )
+        command.setdefault('action', 'wake')
+        if command['action'] != 'wake':
+            raise ValueError(f"--wake_words_json item {index} must use action 'wake'")
+    return commands
 
 
 def main():
@@ -970,6 +1014,10 @@ def main():
     parser.add_argument('--noto_fonts_path', help='Path to noto-fonts component directory')
     parser.add_argument('--extra_files', help='Path to extra files directory to be included in assets')
     parser.add_argument('--base_assets', help='Replace speech models in an existing custom/Emote assets file')
+    parser.add_argument(
+        '--wake_words_json',
+        help='JSON file containing a wake-word command array (overrides the single sdkconfig wake word)'
+    )
     parser.add_argument('--name_length', type=int, default=32, help='Base assets filename field length')
     parser.add_argument('--max_size', type=lambda v: int(v, 0), default=None,
                         help='Fail if assets.bin exceeds this many bytes (decimal or 0x hex)')
@@ -1057,6 +1105,11 @@ def main():
     # Read custom wake word configuration
     custom_wake_word_config = read_custom_wake_word_from_sdkconfig(args.sdkconfig)
     multinet_model_info = None
+
+    try:
+        wake_word_commands = load_wake_word_commands(args.wake_words_json)
+    except ValueError as error:
+        parser.error(str(error))
     
     if custom_wake_word_config and multinet_model_paths:
         # Determine language from multinet models
@@ -1067,7 +1120,7 @@ def main():
             "language": language,
             "duration": 3000,  # Default duration in ms
             "threshold": custom_wake_word_config['threshold'],
-            "commands": [
+            "commands": wake_word_commands or [
                 {
                     "command": custom_wake_word_config['wake_word'],
                     "text": custom_wake_word_config['display'],
@@ -1085,6 +1138,7 @@ def main():
                 args.base_assets, args.output, wakenet_model_paths, multinet_model_paths,
                 idf_target=idf_target, multinet_model_info=multinet_model_info,
                 name_length=args.name_length, max_size=args.max_size,
+                extra_files=extra_files_path,
             )
         except (ValueError, OSError) as error:
             parser.error(str(error))

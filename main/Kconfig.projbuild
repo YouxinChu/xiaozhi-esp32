@@ -6,6 +6,13 @@ config OTA_URL
     help
         The application will access this URL to check for new firmwares and server address.
 
+config WIFI_AP_SSID_PREFIX
+    string "Wi-Fi provisioning name prefix"
+    default "Oraki"
+    help
+        Prefix used for the provisioning hotspot and station hostname.
+        The final name includes the last two MAC bytes, for example Oraki-B24D.
+
 choice
     prompt "Flash Assets"
     default FLASH_DEFAULT_ASSETS if !USE_EMOTE_MESSAGE_STYLE
@@ -942,6 +949,15 @@ config USE_MULTILINE_CHAT_MESSAGE
         with auto-adaptive height.
         When disabled (default), a single-line horizontally scrolling label
         is shown at the bottom of the screen.
+
+config USE_SPEAKING_SPLIT_LAYOUT
+    bool "Use animation/text split layout while speaking"
+    depends on USE_DEFAULT_MESSAGE_STYLE
+    default n
+    help
+        Keep the normal centered animation layout for idle, listening and task
+        states. While speaking, move the animation to the left and show the
+        assistant response as a wrapped, vertically scrolling label on the right.
 
 choice WAKE_WORD_TYPE
     prompt "Wake Word Implementation Type"

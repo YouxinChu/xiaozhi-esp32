@@ -48,6 +48,11 @@ AfeAudioEngine::~AfeAudioEngine() {
     }
 }
 
+bool AfeAudioEngine::SetWakeWordDetectionThreshold(float threshold) {
+    return custom_wake_word_ != nullptr &&
+           custom_wake_word_->SetDetectionThreshold(threshold);
+}
+
 bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
                                 srmodel_list_t* models_list) {
     if (afe_data_ != nullptr || (codec_ != nullptr && !kUseAfeForVoiceProcessing &&
@@ -392,8 +397,12 @@ void AfeAudioEngine::ApplyAfeControls() {
         }
     }
     if (codec_->input_reference()) {
-        const bool enable_aec = (bits & kWakeWordEnabled) ||
-                                (device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled));
+        // Idle wake-word detection has no local playback to cancel. Keeping AEC
+        // enabled here preserves its filter adaptation from the previous reply
+        // and can suppress the next wake phrase. Only use playback-reference AEC
+        // while the conversational voice processor is active.
+        const bool enable_aec =
+            device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled);
         if (enable_aec) {
             afe_iface_->enable_aec(afe_data_);
         } else {

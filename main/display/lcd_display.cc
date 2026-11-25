@@ -20,10 +20,31 @@
 
 #define TAG "LcdDisplay"
 
+namespace {
+constexpr int kEmojiLeft = 8;
+constexpr int kDefaultAnimationWidth = 96;
+constexpr int kSplitPanelGap = 8;
+constexpr int kSplitPanelRightMargin = 8;
+constexpr int kSplitPanelVerticalOffset = 8;
+constexpr int kSplitPanelPadding = 8;
+constexpr int kSplitPanelMinWidth = 48;
+
+bool IsClockText(const char* text) {
+    return text != nullptr && strlen(text) == 5 && text[2] == ':' && text[0] >= '0' &&
+           text[0] <= '9' && text[1] >= '0' && text[1] <= '9' && text[3] >= '0' &&
+           text[3] <= '9' && text[4] >= '0' && text[4] <= '9';
+}
+
+void SetLyricScrollY(void* object, int32_t value) {
+    lv_obj_scroll_to_y(static_cast<lv_obj_t*>(object), value, LV_ANIM_OFF);
+}
+}  // namespace
+
 LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
 LV_FONT_DECLARE(BUILTIN_ICON_FONT);
 LV_FONT_DECLARE(font_material_symbols_30_4);
 LV_FONT_DECLARE(font_noto_emoji_30_4);
+LV_FONT_DECLARE(font_noto_sans_basic_16_4);
 
 void LcdDisplay::InitializeLcdThemes() {
     auto text_font = std::make_shared<LvglBuiltInFont>(&BUILTIN_TEXT_FONT);
@@ -352,6 +373,9 @@ LcdDisplay::~LcdDisplay() {
     }
     if (content_ != nullptr) {
         lv_obj_del(content_);
+    }
+    if (bubble_tail_ != nullptr) {
+        lv_obj_del(bubble_tail_);
     }
     if (bottom_bar_ != nullptr) {
         lv_obj_del(bottom_bar_);
@@ -911,13 +935,13 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_bg_color(container_, lvgl_theme->background_color(), 0);
     lv_obj_set_style_border_color(container_, lvgl_theme->border_color(), 0);
 
-    /* Bottom layer: emoji_box_ - centered display */
+    /* Left column: state animation. */
     emoji_box_ = lv_obj_create(screen);
     lv_obj_set_size(emoji_box_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(emoji_box_, LV_OPA_TRANSP, 0);
     lv_obj_set_style_pad_all(emoji_box_, 0, 0);
     lv_obj_set_style_border_width(emoji_box_, 0, 0);
-    lv_obj_align(emoji_box_, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(emoji_box_, LV_ALIGN_LEFT_MID, 8, 8);
 
     emoji_label_ = lv_label_create(emoji_box_);
     lv_obj_set_style_text_font(emoji_label_, large_icon_font, 0);
@@ -1001,14 +1025,60 @@ void LcdDisplay::SetupUI() {
     lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
 
     status_label_ = lv_label_create(status_bar_);
-    lv_obj_set_width(status_label_, LV_HOR_RES * 0.75);
+    lv_obj_set_width(status_label_, 72);
     lv_label_set_long_mode(status_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_style_text_color(status_label_, lvgl_theme->text_color(), 0);
     lv_label_set_text(status_label_, Lang::Strings::INITIALIZING);
-    lv_obj_align(status_label_, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(status_label_, LV_ALIGN_RIGHT_MID, -lvgl_theme->spacing(4), 0);
 
-#if CONFIG_USE_MULTILINE_CHAT_MESSAGE
+#if CONFIG_USE_SPEAKING_SPLIT_LAYOUT
+    /* Fixed right column used by every state. TTS segments form a vertical lyric list. */
+    bottom_bar_ = lv_obj_create(screen);
+    lv_obj_set_size(bottom_bar_, kSplitPanelMinWidth, LV_SIZE_CONTENT);
+    lv_obj_set_style_radius(bottom_bar_, lvgl_theme->spacing(4), 0);
+    lv_obj_set_style_bg_color(bottom_bar_, lvgl_theme->chat_background_color(), 0);
+    lv_obj_set_style_bg_opa(bottom_bar_, LV_OPA_50, 0);
+    lv_obj_set_style_pad_all(bottom_bar_, lvgl_theme->spacing(4), 0);
+    lv_obj_set_style_border_width(bottom_bar_, 0, 0);
+    lv_obj_set_scrollbar_mode(bottom_bar_, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_scroll_dir(bottom_bar_, LV_DIR_VER);
+    lv_obj_set_flex_flow(bottom_bar_, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(bottom_bar_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_align(bottom_bar_, LV_ALIGN_LEFT_MID, GetSplitPanelLeft(),
+                 kSplitPanelVerticalOffset);
+
+    /* Speech-bubble tail points from the shared text panel toward Oraki. */
+    bubble_tail_ = lv_obj_create(screen);
+    lv_obj_set_size(bubble_tail_, 10, 10);
+    lv_obj_set_style_radius(bubble_tail_, 1, 0);
+    lv_obj_set_style_bg_color(bubble_tail_, lvgl_theme->chat_background_color(), 0);
+    lv_obj_set_style_bg_opa(bubble_tail_, LV_OPA_50, 0);
+    lv_obj_set_style_border_width(bubble_tail_, 0, 0);
+    lv_obj_set_style_pad_all(bubble_tail_, 0, 0);
+    lv_obj_set_style_transform_rotation(bubble_tail_, 450, 0);
+    lv_obj_remove_flag(bubble_tail_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align_to(bubble_tail_, emoji_box_, LV_ALIGN_OUT_RIGHT_MID, 0, 0);
+
+    split_text_font_ = font_noto_sans_basic_16_4;
+    split_text_font_.fallback = text_font;
+
+    chat_message_label_ = lv_label_create(bottom_bar_);
+    lv_label_set_text(chat_message_label_, "");
+    lv_obj_set_width(chat_message_label_, LV_SIZE_CONTENT);
+    lv_obj_set_height(chat_message_label_, LV_SIZE_CONTENT);
+    lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(chat_message_label_, &split_text_font_, 0);
+    lv_obj_set_style_text_color(chat_message_label_, lvgl_theme->text_color(), 0);
+
+    brand_label_ = lv_label_create(status_bar_);
+    lv_label_set_text(brand_label_, "ORAKI");
+    lv_obj_set_style_text_color(brand_label_, lvgl_theme->text_color(), 0);
+    lv_obj_set_style_opa(brand_label_, LV_OPA_50, 0);
+    lv_obj_align(brand_label_, LV_ALIGN_CENTER, 0, 0);
+#elif CONFIG_USE_MULTILINE_CHAT_MESSAGE
     /* Bottom bar - auto height, grows upward with wrapped text */
     bottom_bar_ = lv_obj_create(screen);
     lv_obj_set_width(bottom_bar_, LV_HOR_RES);
@@ -1079,6 +1149,187 @@ void LcdDisplay::SetupUI() {
     lv_obj_add_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
 }
 
+void LcdDisplay::SetSpeakingLayout(bool speaking) {
+#if CONFIG_USE_SPEAKING_SPLIT_LAYOUT
+    DisplayLockGuard lock(this);
+    if (emoji_box_ == nullptr || bottom_bar_ == nullptr || chat_message_label_ == nullptr) {
+        speaking_layout_ = speaking;
+        return;
+    }
+    if (speaking && !speaking_layout_) {
+        ResetSplitPanel("Speaking...");
+    }
+    speaking_layout_ = speaking;
+    lv_obj_set_flex_align(bottom_bar_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_align(emoji_box_, LV_ALIGN_LEFT_MID, 8, 8);
+    lv_obj_align_to(bubble_tail_, emoji_box_, LV_ALIGN_OUT_RIGHT_MID, 0, 0);
+    lv_obj_align(brand_label_, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_remove_flag(brand_label_, LV_OBJ_FLAG_HIDDEN);
+    if (!hide_subtitle_) {
+        lv_obj_remove_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(bubble_tail_, LV_OBJ_FLAG_HIDDEN);
+    }
+#else
+    (void)speaking;
+#endif
+}
+
+void LcdDisplay::SetStatus(const char* status) {
+#if CONFIG_USE_SPEAKING_SPLIT_LAYOUT
+    // State copy lives in the right panel. Keep the top center dedicated to the clock
+    // so the same status is not rendered twice.
+    if (!IsClockText(status)) return;
+#endif
+    LvglDisplay::SetStatus(status);
+}
+
+void LcdDisplay::ResetSplitPanel(const char* content) {
+#if CONFIG_USE_SPEAKING_SPLIT_LAYOUT
+    if (bottom_bar_ == nullptr) return;
+    lv_anim_delete(bottom_bar_, SetLyricScrollY);
+    lv_obj_scroll_to_y(bottom_bar_, 0, LV_ANIM_OFF);
+    lv_obj_set_flex_align(bottom_bar_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_clean(bottom_bar_);
+    auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+    chat_message_label_ = lv_label_create(bottom_bar_);
+    lv_obj_set_width(chat_message_label_, LV_SIZE_CONTENT);
+    lv_obj_set_height(chat_message_label_, LV_SIZE_CONTENT);
+    lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(chat_message_label_, &split_text_font_, 0);
+    lv_obj_set_style_text_color(chat_message_label_, lvgl_theme->text_color(), 0);
+    lv_label_set_text(chat_message_label_, content == nullptr ? "" : content);
+    lv_obj_update_layout(chat_message_label_);
+    const int max_text_width = width_ - GetSplitPanelLeft() - kSplitPanelRightMargin -
+                               (kSplitPanelPadding * 2);
+    if (lv_obj_get_width(chat_message_label_) > max_text_width) {
+        lv_obj_set_width(chat_message_label_, max_text_width);
+    }
+    UpdateSplitPanelSize();
+#else
+    (void)content;
+#endif
+}
+
+void LcdDisplay::AppendLyricSegment(const char* content) {
+#if CONFIG_USE_SPEAKING_SPLIT_LAYOUT
+    if (bottom_bar_ == nullptr || content == nullptr || content[0] == '\0') return;
+    auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+    if (chat_message_label_ != nullptr) {
+        const char* current = lv_label_get_text(chat_message_label_);
+        if (current != nullptr && strcmp(current, "Speaking...") == 0) {
+            lv_obj_del(chat_message_label_);
+            chat_message_label_ = nullptr;
+        } else {
+            lv_obj_set_style_opa(chat_message_label_, LV_OPA_40, 0);
+        }
+    }
+    chat_message_label_ = lv_label_create(bottom_bar_);
+    lv_obj_set_width(chat_message_label_, LV_SIZE_CONTENT);
+    lv_obj_set_height(chat_message_label_, LV_SIZE_CONTENT);
+    lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_style_text_font(chat_message_label_, &split_text_font_, 0);
+    lv_obj_set_style_text_color(chat_message_label_, lvgl_theme->text_color(), 0);
+    lv_obj_set_style_opa(chat_message_label_, LV_OPA_COVER, 0);
+    lv_label_set_text(chat_message_label_, content);
+    lv_obj_update_layout(chat_message_label_);
+    const int max_text_width = width_ - GetSplitPanelLeft() - kSplitPanelRightMargin -
+                               (kSplitPanelPadding * 2);
+    if (lv_obj_get_width(chat_message_label_) > max_text_width) {
+        lv_obj_set_width(chat_message_label_, max_text_width);
+    }
+
+    while (lv_obj_get_child_cnt(bottom_bar_) > 6) {
+        lv_obj_del(lv_obj_get_child(bottom_bar_, 0));
+    }
+    UpdateSplitPanelSize();
+    StartLyricScroll();
+#else
+    (void)content;
+#endif
+}
+
+int LcdDisplay::GetSplitPanelLeft() const {
+#if CONFIG_USE_SPEAKING_SPLIT_LAYOUT
+    int animation_width = kDefaultAnimationWidth;
+    if (gif_controller_ != nullptr && gif_controller_->IsLoaded()) {
+        animation_width = gif_controller_->width();
+    } else if (emoji_image_ != nullptr) {
+        const int image_width = lv_obj_get_width(emoji_image_);
+        if (image_width >= 16 && image_width <= 160) animation_width = image_width;
+    }
+    return kEmojiLeft + animation_width + kSplitPanelGap;
+#else
+    return 0;
+#endif
+}
+
+void LcdDisplay::UpdateSplitPanelSize() {
+#if CONFIG_USE_SPEAKING_SPLIT_LAYOUT
+    if (bottom_bar_ == nullptr) return;
+
+    lv_obj_update_layout(bottom_bar_);
+    int content_width = 0;
+    int content_height = 0;
+    const uint32_t child_count = lv_obj_get_child_cnt(bottom_bar_);
+    for (uint32_t i = 0; i < child_count; ++i) {
+        lv_obj_t* child = lv_obj_get_child(bottom_bar_, i);
+        if (child == nullptr) continue;
+        content_width = std::max(content_width, static_cast<int>(lv_obj_get_width(child)));
+        content_height += lv_obj_get_height(child);
+    }
+
+    const int panel_left = GetSplitPanelLeft();
+    const int max_panel_width = width_ - panel_left - kSplitPanelRightMargin;
+    const int max_panel_height = height_ - 52;
+    const int panel_width = std::min(max_panel_width,
+                                     std::max(kSplitPanelMinWidth,
+                                              content_width + (kSplitPanelPadding * 2)));
+    const int panel_height =
+        std::min(max_panel_height, std::max(32, content_height + (kSplitPanelPadding * 2)));
+    lv_obj_set_size(bottom_bar_, panel_width, panel_height);
+    lv_obj_align(bottom_bar_, LV_ALIGN_LEFT_MID, panel_left, kSplitPanelVerticalOffset);
+    if (bubble_tail_ != nullptr) {
+        lv_obj_align_to(bubble_tail_, emoji_box_, LV_ALIGN_OUT_RIGHT_MID, 0, 0);
+    }
+#endif
+}
+
+void LcdDisplay::StartLyricScroll() {
+#if CONFIG_USE_SPEAKING_SPLIT_LAYOUT
+    if (bottom_bar_ == nullptr) return;
+    lv_anim_delete(bottom_bar_, SetLyricScrollY);
+    lv_obj_update_layout(bottom_bar_);
+    int32_t scroll_distance = lv_obj_get_scroll_bottom(bottom_bar_);
+    if (scroll_distance <= 0) {
+        lv_obj_set_flex_align(bottom_bar_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER);
+        return;
+    }
+
+    // An overflowing answer must begin at its first line. Short answers remain centered.
+    lv_obj_set_flex_align(bottom_bar_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_update_layout(bottom_bar_);
+    lv_obj_scroll_to_y(bottom_bar_, 0, LV_ANIM_OFF);
+    scroll_distance = lv_obj_get_scroll_bottom(bottom_bar_);
+    if (scroll_distance <= 0) return;
+
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, bottom_bar_);
+    lv_anim_set_exec_cb(&animation, SetLyricScrollY);
+    lv_anim_set_values(&animation, 0, scroll_distance);
+    lv_anim_set_delay(&animation, 1200);
+    lv_anim_set_duration(&animation, std::max<int32_t>(2500, scroll_distance * 45));
+    lv_anim_set_path_cb(&animation, lv_anim_path_linear);
+    lv_anim_start(&animation);
+#endif
+}
+
 void LcdDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
     DisplayLockGuard lock(this);
     if (preview_image_ == nullptr) {
@@ -1130,12 +1381,25 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         }
         return;
     }
+#if CONFIG_USE_SPEAKING_SPLIT_LAYOUT
+    if (speaking_layout_ && role != nullptr && strcmp(role, "assistant") == 0 && content != nullptr &&
+        content[0] != '\0') {
+        AppendLyricSegment(content);
+    } else {
+        ResetSplitPanel(content);
+    }
+#else
     lv_anim_delete(chat_message_label_, nullptr);
     lv_label_set_text(chat_message_label_, content);
+#endif
     // Show bottom_bar_ only when there is content (and subtitle is not globally hidden)
     if (bottom_bar_ != nullptr) {
         if (content == nullptr || content[0] == '\0') {
+#if CONFIG_USE_SPEAKING_SPLIT_LAYOUT
+            if (!hide_subtitle_) lv_obj_remove_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);
+#else
             lv_obj_add_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);
+#endif
         } else if (!hide_subtitle_) {
             lv_obj_remove_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);
         }
@@ -1155,25 +1419,50 @@ void LcdDisplay::RemoveChatMessage(const char* role, const char* content) {
         strcmp(lv_label_get_text(chat_message_label_), content) != 0) {
         return;
     }
+    // The split BOX-3 layout always has useful right-panel content in idle. Removing
+    // the temporary startup hint restores that content instead of leaving an empty panel.
+#if CONFIG_USE_SPEAKING_SPLIT_LAYOUT
+    ResetSplitPanel("Say \"Hi Oraki\" to wake me");
+    if (!hide_subtitle_) lv_obj_remove_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);
+#else
     // The classic layout has one text slot and does not distinguish message roles.
     lv_anim_delete(chat_message_label_, nullptr);
     lv_label_set_text(chat_message_label_, "");
     if (bottom_bar_ != nullptr) {
         lv_obj_add_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);
     }
+#endif
 }
 
 void LcdDisplay::ClearChatMessages() {
     DisplayLockGuard lock(this);
     // In non-wechat mode, just clear the chat message label and hide the bar
-    if (chat_message_label_ != nullptr) {
-        lv_label_set_text(chat_message_label_, "");
-    }
+#if CONFIG_USE_SPEAKING_SPLIT_LAYOUT
+    ResetSplitPanel("");
+#else
+    if (chat_message_label_ != nullptr) lv_label_set_text(chat_message_label_, "");
+#endif
     if (bottom_bar_ != nullptr) {
+#if CONFIG_USE_SPEAKING_SPLIT_LAYOUT
+        if (!hide_subtitle_) lv_obj_remove_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);
+#else
         lv_obj_add_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);
+#endif
     }
 }
 #endif
+
+bool LcdDisplay::AddTextGlyphs(const std::vector<TextGlyph>& glyphs, uint8_t bpp) {
+    const bool added = LvglDisplay::AddTextGlyphs(glyphs, bpp);
+    auto text_font = current_theme_ == nullptr ? nullptr : current_theme_->GetTextFont();
+    if (text_font != nullptr && text_font->font() != nullptr) {
+        DisplayLockGuard lock(this);
+        // The compact Latin font does not contain CJK. Route missing codepoints
+        // through the themed font, whose fallback is populated by AddTextGlyphs().
+        split_text_font_.fallback = text_font->font();
+    }
+    return added;
+}
 
 bool LcdDisplay::SetEmotion(const char* emotion) {
     if (!setup_ui_called_) {
@@ -1270,6 +1559,7 @@ bool LcdDisplay::SetEmotion(const char* emotion) {
         lv_obj_add_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
     }
 #endif
+    if (shown) UpdateSplitPanelSize();
     // The WeChat style deliberately hides a neutral emotion. That is a choice about
     // presentation, not a failure to honour the request, so `shown` stands as it was.
     return shown;
@@ -1323,6 +1613,11 @@ void LcdDisplay::SetTheme(Theme* theme) {
     lv_obj_set_style_text_color(mute_label_, lvgl_theme->text_color(), 0);
     lv_obj_set_style_text_color(battery_label_, lvgl_theme->text_color(), 0);
     lv_obj_set_style_text_color(emoji_label_, lvgl_theme->text_color(), 0);
+    if (brand_label_ != nullptr) {
+        lv_obj_set_style_text_color(brand_label_, lvgl_theme->text_color(), 0);
+        lv_obj_set_style_opa(brand_label_, LV_OPA_50, 0);
+        lv_obj_align(brand_label_, LV_ALIGN_CENTER, 0, 0);
+    }
 
     // If we have the chat message style, update all message bubbles
 #if CONFIG_USE_WECHAT_MESSAGE_STYLE
@@ -1397,8 +1692,15 @@ void LcdDisplay::SetTheme(Theme* theme) {
     }
 #else
     // Simple UI mode - just update the main chat message
-    if (chat_message_label_ != nullptr) {
-        lv_obj_set_style_text_color(chat_message_label_, lvgl_theme->text_color(), 0);
+    if (bottom_bar_ != nullptr) {
+        const uint32_t line_count = lv_obj_get_child_cnt(bottom_bar_);
+        for (uint32_t i = 0; i < line_count; ++i) {
+            lv_obj_t* line = lv_obj_get_child(bottom_bar_, i);
+            if (line != nullptr) {
+                lv_obj_set_style_text_font(line, &split_text_font_, 0);
+                lv_obj_set_style_text_color(line, lvgl_theme->text_color(), 0);
+            }
+        }
     }
 
     if (emoji_label_ != nullptr) {
@@ -1408,8 +1710,14 @@ void LcdDisplay::SetTheme(Theme* theme) {
     // Update bottom bar background color with 50% opacity
     if (bottom_bar_ != nullptr) {
         lv_obj_set_style_bg_opa(bottom_bar_, LV_OPA_50, 0);
-        lv_obj_set_style_bg_color(bottom_bar_, lvgl_theme->background_color(), 0);
+        lv_obj_set_style_bg_color(bottom_bar_, lvgl_theme->chat_background_color(), 0);
     }
+    if (bubble_tail_ != nullptr) {
+        lv_obj_set_style_bg_opa(bubble_tail_, LV_OPA_50, 0);
+        lv_obj_set_style_bg_color(bubble_tail_, lvgl_theme->chat_background_color(), 0);
+        lv_obj_align_to(bubble_tail_, emoji_box_, LV_ALIGN_OUT_RIGHT_MID, 0, 0);
+    }
+    split_text_font_.fallback = text_font;
 #endif
 
     // Update low battery popup
@@ -1427,12 +1735,14 @@ void LcdDisplay::SetHideSubtitle(bool hide) {
     if (bottom_bar_ != nullptr) {
         if (hide) {
             lv_obj_add_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);
+            if (bubble_tail_ != nullptr) lv_obj_add_flag(bubble_tail_, LV_OBJ_FLAG_HIDDEN);
         } else {
             // Only show if there is actual content to display
             const char* text =
                 (chat_message_label_ != nullptr) ? lv_label_get_text(chat_message_label_) : nullptr;
             if (text != nullptr && text[0] != '\0') {
                 lv_obj_remove_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);
+                if (bubble_tail_ != nullptr) lv_obj_remove_flag(bubble_tail_, LV_OBJ_FLAG_HIDDEN);
             }
         }
     }

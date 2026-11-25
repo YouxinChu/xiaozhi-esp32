@@ -696,6 +696,11 @@ void AudioService::EnableWakeWordDetection(bool enable) {
     }
 }
 
+bool AudioService::SetWakeWordDetectionThreshold(float threshold) {
+    return audio_engine_initialized_ && audio_engine_ != nullptr &&
+           audio_engine_->SetWakeWordDetectionThreshold(threshold);
+}
+
 void AudioService::ReleaseWakeWordResources() {
 #if !(CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31)
     if (!audio_engine_initialized_) {

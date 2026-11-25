@@ -158,7 +158,8 @@ public:
             AUDIO_CODEC_PA_PIN, 
             AUDIO_CODEC_ES8311_ADDR, 
             AUDIO_CODEC_ES7210_ADDR, 
-            AUDIO_INPUT_REFERENCE);
+            AUDIO_INPUT_REFERENCE,
+            36.0f);  // +6 dB microphone gain; verified speech PCM has ample headroom
         return &audio_codec;
     }
 

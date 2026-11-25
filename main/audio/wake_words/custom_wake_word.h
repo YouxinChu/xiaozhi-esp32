@@ -36,6 +36,7 @@ public:
     bool GetWakeWordOpus(std::vector<uint8_t>& opus);
     const std::string& GetLastDetectedWakeWord() const { return last_detected_wake_word_; }
     std::vector<std::string> GetWakeWords() const override;
+    bool SetDetectionThreshold(float threshold);
 
 private:
     struct Command {
@@ -60,8 +61,11 @@ private:
     std::string last_detected_wake_word_;
     std::atomic<bool> running_ = false;
     std::vector<int16_t> input_buffer_;
+    std::vector<int16_t> timeout_overlap_buffer_;
+    size_t timeout_overlap_chunk_capacity_ = 0;
+    size_t timeout_overlap_chunk_count_ = 0;
+    size_t timeout_overlap_next_chunk_ = 0;
     std::mutex input_buffer_mutex_;
-
     TaskHandle_t wake_word_encode_task_ = nullptr;
     StaticTask_t* wake_word_encode_task_buffer_ = nullptr;
     StackType_t* wake_word_encode_task_stack_ = nullptr;
@@ -71,6 +75,10 @@ private:
     std::condition_variable wake_word_cv_;
 
     void FeedSamples(const int16_t* data, size_t samples, bool mono);
+    void ResetTimeoutOverlap();
+    void RememberTimeoutOverlap(const int16_t* samples, size_t sample_count);
+    bool ReplayTimeoutOverlap();
+    bool HandleDetectedCommand();
     void ParseWakenetModelConfig();
 };
 

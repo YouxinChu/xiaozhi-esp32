@@ -7,6 +7,7 @@
 #include <web_socket.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
+#include <atomic>
 
 #define WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT (1 << 0)
 
@@ -24,9 +25,12 @@ public:
 private:
     EventGroupHandle_t event_group_handle_;
     std::shared_ptr<WebSocket> websocket_;
+    std::atomic<uint32_t> audio_channel_generation_{0};
+    std::atomic<uint32_t> expected_disconnect_generation_{0};
     int version_ = 1;
 
     void ParseServerHello(const cJSON* root);
+    void ParseWakeWordConfig(const cJSON* root);
     bool SendText(const std::string& text) override;
     std::string GetHelloMessage();
 };

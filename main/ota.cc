@@ -198,6 +198,19 @@ NetworkResult<> Ota::CheckVersion() {
         ESP_LOGI(TAG, "No websocket section found!");
     }
 
+    cJSON* wake_word = cJSON_GetObjectItem(root, "wake_word");
+    if (cJSON_IsObject(wake_word)) {
+        cJSON* threshold = cJSON_GetObjectItem(wake_word, "threshold_percent");
+        if (cJSON_IsNumber(threshold) && threshold->valueint >= 5 &&
+            threshold->valueint <= 50) {
+            Settings settings("wake_word", true);
+            settings.SetInt("threshold_pct", threshold->valueint);
+            ESP_LOGI(TAG, "Received wake threshold %d%%", threshold->valueint);
+        } else {
+            ESP_LOGW(TAG, "Ignoring invalid wake threshold from OTA response");
+        }
+    }
+
     has_server_time_ = false;
     cJSON *server_time = cJSON_GetObjectItem(root, "server_time");
     if (cJSON_IsObject(server_time)) {

@@ -139,6 +139,7 @@ public:
     void EnableVoiceProcessing(bool enable);
     void EnableAudioTesting(bool enable);
     void EnableDeviceAec(bool enable);
+    bool SetWakeWordDetectionThreshold(float threshold);
 
     void SetCallbacks(AudioServiceCallbacks& callbacks);
 

@@ -129,7 +129,7 @@ elseif(CONFIG_BOARD_TYPE_DF_S3_AI_CAM)
     set(BOARD_DIR "dfrobot/df-s3-ai-cam")
 elseif(CONFIG_BOARD_TYPE_ESP32_S3_BOX_3)
     set(BOARD_DIR "espressif/esp32-s3-box-3")
-    set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
+    set(BUILTIN_TEXT_FONT font_noto_sans_basic_16_4)
     set(BUILTIN_ICON_FONT font_material_symbols_20_4)
     set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_128)
     set(EMOTE_RESOLUTION "320_240")
@@ -1327,6 +1327,18 @@ function(build_default_assets_bin)
         "--output" "${GENERATED_ASSETS_BIN}"
     )
 
+    # Product builds may provide multiple custom MultiNet wake phrases without
+    # changing the generic sdkconfig format, which only stores one phrase.
+    if(ORAKI_WAKE_WORDS_JSON)
+        get_filename_component(WAKE_WORDS_JSON "${ORAKI_WAKE_WORDS_JSON}" ABSOLUTE
+            BASE_DIR "${PROJECT_DIR}")
+        if(NOT EXISTS "${WAKE_WORDS_JSON}")
+            message(FATAL_ERROR "Wake words JSON not found: ${WAKE_WORDS_JSON}")
+        endif()
+        list(APPEND BUILD_ARGS "--wake_words_json" "${WAKE_WORDS_JSON}")
+        list(APPEND DEFAULT_ASSETS_DEPENDENCIES "${WAKE_WORDS_JSON}")
+    endif()
+
     # Add builtin text font if defined
     if(BUILTIN_TEXT_FONT)
         list(APPEND BUILD_ARGS "--builtin_text_font" "${BUILTIN_TEXT_FONT}")
@@ -1453,6 +1465,15 @@ function(configure_assets_models assets_source assets_output)
         "--esp_sr_model_path" "${ESP_SR_MODEL_PATH}"
         "--name_length" "${ASSETS_NAME_LENGTH}"
     )
+    if(ORAKI_WAKE_WORDS_JSON)
+        get_filename_component(WAKE_WORDS_JSON "${ORAKI_WAKE_WORDS_JSON}" ABSOLUTE
+            BASE_DIR "${PROJECT_DIR}")
+        if(NOT EXISTS "${WAKE_WORDS_JSON}")
+            message(FATAL_ERROR "Wake words JSON not found: ${WAKE_WORDS_JSON}")
+        endif()
+        list(APPEND MODEL_ARGS "--wake_words_json" "${WAKE_WORDS_JSON}")
+        set(MODEL_WAKE_WORD_DEPENDENCY "${WAKE_WORDS_JSON}")
+    endif()
     partition_table_get_partition_info(assets_limit "--partition-name assets" "size")
     if(assets_limit)
         list(APPEND MODEL_ARGS "--max_size" "${assets_limit}")
@@ -1460,7 +1481,7 @@ function(configure_assets_models assets_source assets_output)
     add_custom_command(
         OUTPUT "${assets_output}"
         COMMAND python ${PROJECT_DIR}/scripts/build_default_assets.py ${MODEL_ARGS}
-        DEPENDS "${assets_source}" "${SDKCONFIG}" "${PROJECT_DIR}/scripts/build_default_assets.py"
+        DEPENDS "${assets_source}" "${SDKCONFIG}" "${PROJECT_DIR}/scripts/build_default_assets.py" ${MODEL_WAKE_WORD_DEPENDENCY}
         COMMENT "Configuring speech models in custom assets"
         VERBATIM
     )

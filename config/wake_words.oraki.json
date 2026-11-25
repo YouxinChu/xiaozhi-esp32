@@ -1,0 +1,12 @@
+[
+  {
+    "command": "hi oraki",
+    "text": "Hi Oraki",
+    "action": "wake"
+  },
+  {
+    "command": "hey oraki",
+    "text": "Hey Oraki",
+    "action": "wake"
+  }
+]

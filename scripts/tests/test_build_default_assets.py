@@ -150,6 +150,20 @@ class BuildDefaultAssetsTest(unittest.TestCase):
 
 
 class ConfiguredAssetsTest(unittest.TestCase):
+    def test_base_assets_merges_extra_state_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base, _ = self.base_pack(root)
+            extras = root / "extras"
+            extras.mkdir()
+            (extras / "wake.gif").write_bytes(b"wake animation")
+            BUILD.configure_assets_models(
+                str(base), str(root / "configured.bin"), [], [],
+                extra_files=str(extras),
+            )
+            files = BUILD.read_assets_entries(root / "configured.bin")
+            self.assertEqual(files["wake.gif"][0], b"wake animation")
+
     def base_pack(self, root, name_length=32):
         index = {"version": 1, "srmodels": "old-speech.bin", "text_font": "font.bin",
                  "emoji_collection": [{"name": "happy", "file": "image.bin"}],
@@ -266,6 +280,27 @@ class ConfiguredAssetsTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("requires selected, available", result.stderr)
             self.assertFalse((root / "unused.bin").exists())
+
+
+class WakeWordCommandsTest(unittest.TestCase):
+    def test_loads_two_wake_commands_and_defaults_action(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "wake_words.json"
+            path.write_text(json.dumps([
+                {"command": "hi oraki", "text": "Hi Oraki"},
+                {"command": "hey oraki", "text": "Hey Oraki", "action": "wake"},
+            ]), encoding="utf-8")
+            commands = BUILD.load_wake_word_commands(path)
+            self.assertEqual([item["command"] for item in commands], ["hi oraki", "hey oraki"])
+            self.assertEqual([item["action"] for item in commands], ["wake", "wake"])
+
+    def test_rejects_empty_or_non_wake_commands(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "wake_words.json"
+            for value in ([], [{"command": "hi oraki", "text": "Hi Oraki", "action": "ignore"}]):
+                path.write_text(json.dumps(value), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    BUILD.load_wake_word_commands(path)
 
 
 if __name__ == "__main__":

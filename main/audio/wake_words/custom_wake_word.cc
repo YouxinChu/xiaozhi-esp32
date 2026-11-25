@@ -2,14 +2,28 @@
 #include "audio_service.h"
 #include "system_info.h"
 #include "assets.h"
+#include "settings.h"
 
 #include <esp_log.h>
 #include <esp_mn_iface.h>
 #include <esp_mn_models.h>
 #include <esp_mn_speech_commands.h>
 #include <cJSON.h>
+#include <algorithm>
+#include <cmath>
 
 #define TAG "CustomWakeWord"
+
+namespace {
+constexpr float kMinDetectionThreshold = 0.05f;
+constexpr float kMaxDetectionThreshold = 0.50f;
+// MultiNet clears its partial command state when this window expires.  The
+// default asset value (3 seconds) makes a normal wake phrase unreliable when
+// it happens to straddle a window boundary, so continuous wake-word detection
+// uses a longer window and resets it explicitly at session boundaries.
+constexpr int kContinuousWakeRecognitionWindowMs = 15000;
+constexpr int kTimeoutOverlapMs = 2000;
+}
 
 CustomWakeWord::CustomWakeWord()
     : wake_word_opus_() {
@@ -99,6 +113,14 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) 
         ParseWakenetModelConfig();
     }
 
+    Settings settings("wake_word", false);
+    const int stored_threshold_percent = settings.GetInt("threshold_pct", -1);
+    if (stored_threshold_percent >= static_cast<int>(kMinDetectionThreshold * 100) &&
+        stored_threshold_percent <= static_cast<int>(kMaxDetectionThreshold * 100)) {
+        threshold_ = stored_threshold_percent / 100.0f;
+        ESP_LOGI(TAG, "Using persisted wake threshold %.3f", threshold_);
+    }
+
     if (models_ == nullptr || models_->num == -1) {
         ESP_LOGE(TAG, "Failed to initialize wakenet model");
         return false;
@@ -117,9 +139,18 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) 
     }
 
     multinet_ = esp_mn_handle_from_name(mn_name_);
+    duration_ = std::max(duration_, kContinuousWakeRecognitionWindowMs);
     multinet_model_data_ = multinet_->create(mn_name_, duration_);
     multinet_->set_det_threshold(multinet_model_data_, threshold_);
-    input_buffer_.reserve(multinet_->get_samp_chunksize(multinet_model_data_));
+    const size_t chunksize = multinet_->get_samp_chunksize(multinet_model_data_);
+    const size_t sample_rate = multinet_->get_samp_rate(multinet_model_data_);
+    input_buffer_.reserve(chunksize);
+    timeout_overlap_chunk_capacity_ = std::max<size_t>(
+        1, (sample_rate * kTimeoutOverlapMs / 1000 + chunksize - 1) / chunksize);
+    timeout_overlap_buffer_.resize(timeout_overlap_chunk_capacity_ * chunksize);
+    ResetTimeoutOverlap();
+    ESP_LOGI(TAG, "Continuous recognition window=%d ms overlap=%d ms (%zu chunks)",
+             duration_, kTimeoutOverlapMs, timeout_overlap_chunk_capacity_);
     esp_mn_commands_clear();
     for (int i = 0; i < commands_.size(); i++) {
         esp_mn_commands_add(i + 1, commands_[i].command.c_str());
@@ -139,6 +170,24 @@ void CustomWakeWord::OnWakeWordDetected(std::function<void(const std::string& wa
     wake_word_detected_callback_ = callback;
 }
 
+bool CustomWakeWord::SetDetectionThreshold(float threshold) {
+    if (!std::isfinite(threshold) || threshold < kMinDetectionThreshold ||
+        threshold > kMaxDetectionThreshold || multinet_ == nullptr ||
+        multinet_model_data_ == nullptr) {
+        ESP_LOGW(TAG, "Rejected wake threshold %.3f", threshold);
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+    const float previous = threshold_;
+    threshold_ = threshold;
+    multinet_->set_det_threshold(multinet_model_data_, threshold_);
+    Settings settings("wake_word", true);
+    settings.SetInt("threshold_pct", static_cast<int>(std::lround(threshold_ * 100.0f)));
+    ESP_LOGI(TAG, "Wake threshold changed: %.3f -> %.3f", previous, threshold_);
+    return true;
+}
+
 std::vector<std::string> CustomWakeWord::GetWakeWords() const {
     std::vector<std::string> words;
     if (multinet_model_data_ == nullptr) {
@@ -153,14 +202,26 @@ std::vector<std::string> CustomWakeWord::GetWakeWords() const {
 }
 
 void CustomWakeWord::Start() {
-    running_ = true;
+    {
+        std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+        input_buffer_.clear();
+        ResetTimeoutOverlap();
+        multinet_->clean(multinet_model_data_);
+        running_ = true;
+    }
+    ESP_LOGI(TAG, "Wake-word detection started: model=%s language=%s threshold=%.3f commands=%zu",
+             mn_name_ ? mn_name_ : "none", language_.c_str(), threshold_, commands_.size());
 }
 
 void CustomWakeWord::Stop() {
     running_ = false;
-
-    std::lock_guard<std::mutex> lock(input_buffer_mutex_);
-    input_buffer_.clear();
+    {
+        std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+        input_buffer_.clear();
+        ResetTimeoutOverlap();
+        multinet_->clean(multinet_model_data_);
+    }
+    ESP_LOGI(TAG, "Wake-word detection stopped");
 }
 
 void CustomWakeWord::Feed(const std::vector<int16_t>& data) {
@@ -169,6 +230,79 @@ void CustomWakeWord::Feed(const std::vector<int16_t>& data) {
 
 void CustomWakeWord::FeedMono(const int16_t* data, size_t samples) {
     FeedSamples(data, samples, true);
+}
+
+void CustomWakeWord::ResetTimeoutOverlap() {
+    timeout_overlap_chunk_count_ = 0;
+    timeout_overlap_next_chunk_ = 0;
+}
+
+void CustomWakeWord::RememberTimeoutOverlap(const int16_t* samples, size_t sample_count) {
+    if (timeout_overlap_chunk_capacity_ == 0 || timeout_overlap_buffer_.empty() ||
+        samples == nullptr || sample_count == 0) {
+        return;
+    }
+    const size_t chunksize = multinet_->get_samp_chunksize(multinet_model_data_);
+    if (sample_count != chunksize) {
+        return;
+    }
+    std::copy_n(samples, chunksize,
+                timeout_overlap_buffer_.begin() + timeout_overlap_next_chunk_ * chunksize);
+    timeout_overlap_next_chunk_ =
+        (timeout_overlap_next_chunk_ + 1) % timeout_overlap_chunk_capacity_;
+    timeout_overlap_chunk_count_ =
+        std::min(timeout_overlap_chunk_count_ + 1, timeout_overlap_chunk_capacity_);
+}
+
+bool CustomWakeWord::HandleDetectedCommand() {
+    esp_mn_results_t* mn_result = multinet_->get_results(multinet_model_data_);
+    for (int i = 0; i < mn_result->num && running_; i++) {
+        const int command_index = mn_result->command_id[i] - 1;
+        if (command_index < 0 || command_index >= static_cast<int>(commands_.size())) {
+            ESP_LOGW(TAG, "Ignoring invalid command_id=%d", mn_result->command_id[i]);
+            continue;
+        }
+        ESP_LOGI(TAG, "Custom wake word detected: command_id=%d, string=%s, prob=%f",
+                 mn_result->command_id[i], mn_result->string, mn_result->prob[i]);
+        auto& command = commands_[command_index];
+        if (command.action == "wake") {
+            last_detected_wake_word_ = command.text;
+            running_ = false;
+            input_buffer_.clear();
+            ResetTimeoutOverlap();
+            if (wake_word_detected_callback_) {
+                wake_word_detected_callback_(last_detected_wake_word_);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+bool CustomWakeWord::ReplayTimeoutOverlap() {
+    if (timeout_overlap_chunk_count_ == 0 || timeout_overlap_chunk_capacity_ == 0) {
+        return false;
+    }
+    const size_t chunksize = multinet_->get_samp_chunksize(multinet_model_data_);
+    const size_t oldest = timeout_overlap_chunk_count_ == timeout_overlap_chunk_capacity_
+                              ? timeout_overlap_next_chunk_
+                              : 0;
+    for (size_t i = 0; i < timeout_overlap_chunk_count_ && running_; ++i) {
+        const size_t chunk_index = (oldest + i) % timeout_overlap_chunk_capacity_;
+        int16_t* chunk = timeout_overlap_buffer_.data() + chunk_index * chunksize;
+        const esp_mn_state_t state = multinet_->detect(multinet_model_data_, chunk);
+        if (state == ESP_MN_STATE_DETECTED) {
+            const bool detected = HandleDetectedCommand();
+            multinet_->clean(multinet_model_data_);
+            return detected;
+        }
+        if (state == ESP_MN_STATE_TIMEOUT) {
+            ESP_LOGW(TAG, "MultiNet timed out while replaying overlap audio");
+            multinet_->clean(multinet_model_data_);
+            return false;
+        }
+    }
+    return false;
 }
 
 void CustomWakeWord::FeedSamples(const int16_t* data, size_t samples, bool mono) {
@@ -197,28 +331,16 @@ void CustomWakeWord::FeedSamples(const int16_t* data, size_t samples, bool mono)
         wake_word_audio_cache_.Store(input_buffer_.data(), chunksize);
 #endif
 
+        RememberTimeoutOverlap(input_buffer_.data(), chunksize);
         esp_mn_state_t mn_state = multinet_->detect(multinet_model_data_, input_buffer_.data());
-        
+
         if (mn_state == ESP_MN_STATE_DETECTED) {
-            esp_mn_results_t *mn_result = multinet_->get_results(multinet_model_data_);
-            for (int i = 0; i < mn_result->num && running_; i++) {
-                ESP_LOGI(TAG, "Custom wake word detected: command_id=%d, string=%s, prob=%f", 
-                        mn_result->command_id[i], mn_result->string, mn_result->prob[i]);
-                auto& command = commands_[mn_result->command_id[i] - 1];
-                if (command.action == "wake") {
-                    last_detected_wake_word_ = command.text;
-                    running_ = false;
-                    input_buffer_.clear();
-                    
-                    if (wake_word_detected_callback_) {
-                        wake_word_detected_callback_(last_detected_wake_word_);
-                    }
-                }
-            }
+            HandleDetectedCommand();
             multinet_->clean(multinet_model_data_);
         } else if (mn_state == ESP_MN_STATE_TIMEOUT) {
-            ESP_LOGD(TAG, "Command word detection timeout, cleaning state");
+            ESP_LOGD(TAG, "Command word detection timeout, replaying overlap");
             multinet_->clean(multinet_model_data_);
+            ReplayTimeoutOverlap();
         }
         
         if (!running_) {

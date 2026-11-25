@@ -73,10 +73,16 @@ bool WebsocketProtocol::IsAudioChannelOpened() const {
 
 void WebsocketProtocol::CloseAudioChannel(bool send_goodbye) {
     (void)send_goodbye;  // Websocket doesn't need to send goodbye message
+    expected_disconnect_generation_.store(audio_channel_generation_.load());
     websocket_.reset();
 }
 
 bool WebsocketProtocol::OpenAudioChannel() {
+    // Replacing a timed-out socket can deliver the old socket's disconnect
+    // callback after the new channel is already open. Mark the replacement
+    // first so that stale callback cannot force the application back to idle.
+    const auto generation = audio_channel_generation_.fetch_add(1) + 1;
+
     Settings settings("websocket", false);
     std::string url = settings.GetString("url");
     std::string token = settings.GetString("token");
@@ -145,6 +151,8 @@ bool WebsocketProtocol::OpenAudioChannel() {
             if (cJSON_IsString(type)) {
                 if (strcmp(type->valuestring, "hello") == 0) {
                     ParseServerHello(root);
+                } else if (strcmp(type->valuestring, "config") == 0) {
+                    ParseWakeWordConfig(root);
                 } else {
                     if (on_incoming_json_ != nullptr) {
                         on_incoming_json_(root);
@@ -169,8 +177,20 @@ bool WebsocketProtocol::OpenAudioChannel() {
         });
     });
 
-    websocket_->OnDisconnected([this]() {
+    websocket_->OnDisconnected([this, generation]() {
         ESP_LOGI(TAG, "Websocket disconnected");
+        if (generation != audio_channel_generation_.load()) {
+            uint32_t expected = generation;
+            expected_disconnect_generation_.compare_exchange_strong(expected, 0);
+            ESP_LOGI(TAG, "Ignoring stale websocket disconnect (generation %lu, current %lu)",
+                     static_cast<unsigned long>(generation),
+                     static_cast<unsigned long>(audio_channel_generation_.load()));
+            return;
+        }
+        const bool expected = expected_disconnect_generation_.exchange(0) == generation;
+        if (!expected && on_disconnected_ != nullptr) {
+            on_disconnected_();
+        }
         if (on_audio_channel_closed_ != nullptr) {
             on_audio_channel_closed_();
         }
@@ -262,5 +282,25 @@ void WebsocketProtocol::ParseServerHello(const cJSON* root) {
         }
     }
 
+    ParseWakeWordConfig(root);
+
     xEventGroupSetBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT);
+}
+
+void WebsocketProtocol::ParseWakeWordConfig(const cJSON* root) {
+    auto wake_word = cJSON_GetObjectItem(root, "wake_word");
+    if (!cJSON_IsObject(wake_word)) {
+        return;
+    }
+    auto threshold = cJSON_GetObjectItem(wake_word, "threshold_percent");
+    if (!cJSON_IsNumber(threshold) || threshold->valueint < 5 || threshold->valueint > 50) {
+        ESP_LOGW(TAG, "Ignoring invalid WebSocket wake threshold");
+        return;
+    }
+    const int threshold_percent = threshold->valueint;
+    Application::GetInstance().Schedule([threshold_percent]() {
+        if (!Application::GetInstance().UpdateWakeWordThreshold(threshold_percent)) {
+            ESP_LOGW(TAG, "WebSocket wake threshold %d%% could not be applied", threshold_percent);
+        }
+    });
 }

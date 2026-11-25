@@ -6,7 +6,8 @@
         {
             "name": "esp-box-3",
             "sdkconfig_append": [
-                "CONFIG_USE_DEVICE_AEC=y"
+                "CONFIG_USE_DEVICE_AEC=y",
+                "CONFIG_USE_SPEAKING_SPLIT_LAYOUT=y"
             ]
         }
     ]
